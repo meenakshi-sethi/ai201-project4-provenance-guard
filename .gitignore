@@ -1,0 +1,35 @@
+# Environment variables
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime generated
+audit_log.json
+
+# Course files — not for repo
+show-project-week4.md
+"Show (Project)_ Week 4 - AI201 _ Applications of AI Engineering _ CodePath Courses.pdf"
+*.pdf
