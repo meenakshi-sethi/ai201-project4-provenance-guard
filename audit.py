@@ -17,7 +17,7 @@ def _save(entries: list) -> None:
         json.dump(entries, f, indent=2)
 
 
-def log_submission(content_id, creator_id, attribution, confidence, llm_score, stylo_score) -> None:
+def log_submission(content_id, creator_id, attribution, confidence, llm_score, stylo_score, transition_score=None) -> None:
     entries = _load()
     entries.append({
         "content_id": content_id,
@@ -27,6 +27,7 @@ def log_submission(content_id, creator_id, attribution, confidence, llm_score, s
         "confidence": confidence,
         "llm_score": llm_score,
         "stylo_score": stylo_score,
+        "transition_score": transition_score,
         "status": "classified",
         "appeal_reasoning": None,
     })

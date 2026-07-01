@@ -212,6 +212,59 @@ Retrieve live: `GET http://localhost:5000/log`
 
 ---
 
+## Stretch Features
+
+### Ensemble Detection (3rd Signal)
+
+Added **transition phrase density** as Signal 3 — counts AI-typical hedging and transitional phrases ("furthermore", "it is important to note", "moreover", "in conclusion", etc.) per 100 words.
+
+**Why distinct from Signals 1 & 2:** Captures vocabulary-level patterns independent of both semantic LLM scoring and structural stylometrics. A text can have varied sentence lengths (fooling Signal 2) and ambiguous semantics (fooling Signal 1) but still betray itself through formulaic transition phrases.
+
+**Updated weighting:**
+```
+confidence = 0.5 × llm_score + 0.3 × stylo_score + 0.2 × transition_score
+```
+
+**Blind spot:** Academic human writing also uses formal transitions — essays and research writing may score higher than expected.
+
+**Live test result:**
+```json
+{
+  "signals": { "llm_score": 0.8, "stylo_score": 0.51, "transition_score": 1.0 },
+  "confidence": 0.75,
+  "attribution": "likely_ai"
+}
+```
+
+---
+
+### Analytics Dashboard
+
+`GET /analytics` returns detection patterns across all submissions:
+
+```bash
+curl http://localhost:5001/analytics
+```
+
+```json
+{
+  "total_submissions": 15,
+  "attribution_breakdown": {
+    "likely_ai":    { "count": 2,  "percent": 13.3 },
+    "uncertain":    { "count": 12, "percent": 80.0 },
+    "likely_human": { "count": 1,  "percent": 6.7  }
+  },
+  "appeal_rate": 6.7,
+  "average_confidence": 0.6335
+}
+```
+
+- **Attribution breakdown** — distribution across all three label categories
+- **Appeal rate** — % of submissions that received an appeal
+- **Average confidence** — extra metric showing overall system certainty across all decisions
+
+---
+
 ## File Structure
 
 ```

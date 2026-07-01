@@ -82,6 +82,29 @@ GET /log  ──► return last N audit entries as JSON
 
 **Appeal flow:** A `content_id` + reasoning hits `/appeal`, which locates the original entry, flips its status to `under_review`, appends the appeal to the log, and confirms receipt.
 
+## Stretch Features
+
+### Stretch 1: Ensemble Detection (3rd Signal)
+
+**Signal 3: Transition Phrase Density (pure Python)**
+- **Measures:** Frequency of AI-typical hedging and transitional phrases per 100 words — e.g. "it is important to note", "furthermore", "moreover", "in conclusion", "it is worth noting", "additionally"
+- **Why distinct:** Captures vocabulary-level patterns; completely independent of semantic LLM scoring and structural stylometrics
+- **Output:** Float 0–1
+- **Blind spot:** Academic human writing also uses formal transitions; may produce false positives on essays
+
+**Updated weighting (3-signal):**
+`confidence = 0.5 * llm_score + 0.3 * stylo_score + 0.2 * transition_score`
+
+LLM weight reduced from 0.6 → 0.5 to distribute weight across 3 signals while keeping it dominant.
+
+### Stretch 2: Analytics Dashboard
+
+New `GET /analytics` endpoint returning:
+- Total submissions count
+- Attribution breakdown: count + % for each of `likely_ai`, `uncertain`, `likely_human`
+- Appeal rate: (entries with appeal / total submissions)
+- Average confidence score across all submissions
+
 ## AI Tool Plan
 
 ### M3 — Submission endpoint + Signal 1

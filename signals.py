@@ -60,8 +60,33 @@ def stylo_score(text: str) -> float:
     return round((var_score + ttr_score + punct_score) / 3, 4)
 
 
-def combine_scores(llm: float, stylo: float) -> float:
-    return round(0.6 * llm + 0.4 * stylo, 4)
+_TRANSITION_PHRASES = [
+    "it is important to note", "it is worth noting", "it should be noted",
+    "furthermore", "moreover", "additionally", "in conclusion", "in summary",
+    "it is essential to", "it is crucial to", "needless to say",
+    "as previously mentioned", "as noted above", "in other words",
+    "on the other hand", "having said that", "all things considered",
+    "at the end of the day", "in light of", "with regard to",
+]
+
+
+def transition_score(text: str) -> float:
+    """Return probability (0–1) text is AI-generated based on transition phrase density."""
+    text_lower = text.lower()
+    words = re.findall(r"\b\w+\b", text_lower)
+    if not words:
+        return 0.5
+
+    count = sum(text_lower.count(phrase) for phrase in _TRANSITION_PHRASES)
+    density = count / (len(words) / 100)
+    # >3 per 100 words is very AI-like; 0 is neutral (not absence of AI)
+    return round(max(0.0, min(1.0, density / 3.0)), 4)
+
+
+def combine_scores(llm: float, stylo: float, transition: float = None) -> float:
+    if transition is None:
+        return round(0.6 * llm + 0.4 * stylo, 4)
+    return round(0.5 * llm + 0.3 * stylo + 0.2 * transition, 4)
 
 
 def attribution(confidence: float) -> str:
