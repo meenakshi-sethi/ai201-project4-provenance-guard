@@ -1,6 +1,6 @@
 # Provenance Guard
 
-A backend API that classifies creative text as human- or AI-written, returns a transparency label, supports creator appeals, enforces rate limiting, and logs every decision.
+A backend API that classifies creative text as human- or AI-written using a 3-signal ensemble pipeline, returns a transparency label, supports creator appeals, enforces rate limiting, and logs every decision.
 
 ## Setup
 
@@ -11,21 +11,25 @@ echo "GROQ_API_KEY=your_key_here" > .env
 python app.py
 ```
 
+Server runs on `http://localhost:5001`.
+
 ---
 
 ## Architecture Overview
 
-A submission enters `POST /submit`. The text is run through two independent detection signals: an LLM call to Groq (semantic) and stylometric heuristics (structural). Their scores are weighted into a single confidence value, mapped to a transparency label, logged to `audit_log.json`, and returned to the caller.
+A submission enters `POST /submit`. The text runs through three independent detection signals: an LLM call to Groq (semantic), stylometric heuristics (structural), and transition phrase density (vocabulary-level). Their scores are weighted into a single confidence value, mapped to a transparency label, logged to `audit_log.json`, and returned to the caller.
 
 An appeal enters `POST /appeal` with the `content_id`. The original log entry is updated to `under_review` and the creator's reasoning is stored alongside the original decision.
 
 ```
-POST /submit → llm_classify() + stylo_score() → combine_scores()
-            → attribution() → make_label() → audit log → response
+POST /submit → llm_classify() + stylo_score() + transition_score()
+            → combine_scores() → attribution() → make_label()
+            → audit log → response
 
 POST /appeal → lookup content_id → status="under_review" → audit log → response
 
-GET  /log    → return last 20 audit entries
+GET  /log       → return last 20 audit entries
+GET  /analytics → return detection patterns and appeal rate
 ```
 
 ---
@@ -33,7 +37,7 @@ GET  /log    → return last 20 audit entries
 ## Detection Signals
 
 ### Signal 1 — LLM Classification (Groq `llama-3.3-70b-versatile`)
-Prompts the model to return a single float (0 = human, 1 = AI). Captures semantic coherence, phrasing uniformity, and stylistic patterns holistically. Weight: **60%**.
+Prompts the model to return a single float (0 = human, 1 = AI). Captures semantic coherence, phrasing uniformity, and stylistic patterns holistically. Weight: **50%**.
 
 **Why chosen:** LLMs are best positioned to recognise LLM output patterns at a semantic level — patterns that are invisible to statistical heuristics.
 
@@ -45,17 +49,26 @@ Three sub-metrics averaged into one score:
 - **Type-token ratio (TTR)** — measures vocabulary diversity; extreme values → more AI-like
 - **Punctuation density** — AI tends toward moderate, consistent punctuation; extremes suggest AI
 
-Weight: **40%**.
+Weight: **30%**.
 
 **Why chosen:** Purely structural — independent of the semantic signal. Requires no external API call and adds a corroborating data point that is hard for lightly-edited AI output to fake.
 
 **Blind spot:** Minimalist poetry or transcribed speech can exhibit low variance and trigger false positives.
 
+### Signal 3 — Transition Phrase Density (pure Python)
+Counts AI-typical hedging and transitional phrases per 100 words — "furthermore", "it is important to note", "moreover", "in conclusion", "additionally", etc.
+
+Weight: **20%**.
+
+**Why chosen:** Captures vocabulary-level patterns completely independent of Signals 1 and 2. A text can have varied sentence lengths (fooling Signal 2) and ambiguous semantics (fooling Signal 1) but still betray itself through formulaic transitions.
+
+**Blind spot:** Academic human writing also uses formal transitions — essays may score higher than expected.
+
 ---
 
 ## Confidence Scoring
 
-Combined score: `confidence = 0.6 × llm_score + 0.4 × stylo_score`
+Combined score: `confidence = 0.5 × llm_score + 0.3 × stylo_score + 0.2 × transition_score`
 
 | Score | Label |
 |---|---|
@@ -67,10 +80,10 @@ The threshold for `likely_ai` is intentionally high (0.70) because **false posit
 
 ### Example submissions
 
-| Input | LLM score | Stylo score | Confidence | Label |
-|---|---|---|---|---|
-| "It is important to note that the implementation of artificial intelligence solutions necessitates a comprehensive framework…" | 0.90 | 0.58 | **0.77** | `likely_ai` |
-| "ok so i finally tried that new ramen place downtown and honestly? underwhelming…" | 0.20 | 0.26 | **0.22** | `likely_human` |
+| Input | LLM | Stylo | Transition | Confidence | Label |
+|---|---|---|---|---|---|
+| "It is important to note that the implementation of AI necessitates a comprehensive framework for ethical governance. Furthermore, enterprises must prioritize transparency…" | 0.80 | 0.51 | 1.00 | **0.75** | `likely_ai` |
+| "ok so i finally tried that new ramen place downtown and honestly? underwhelming. the broth was fine but they put WAY too much sodium in it…" | 0.20 | 0.26 | 0.00 | **0.22** | `likely_human` |
 
 ---
 
@@ -80,9 +93,9 @@ All three exact variants as displayed to users:
 
 | Variant | Label text |
 |---|---|
-| High-confidence AI | `"⚠️ Likely AI-Generated — Our system detected patterns consistent with AI-generated content (84% confidence). The creator may appeal this classification."` |
-| Uncertain | `"❓ Origin Uncertain — Our system could not confidently determine authorship (52% confidence). When in doubt, we assume human authorship."` |
-| High-confidence Human | `"✓ Likely Human-Written — Our system found no strong indicators of AI generation (14% confidence)."` |
+| High-confidence AI | `"⚠️ Likely AI-Generated — Our system detected patterns consistent with AI-generated content (75% confidence). The creator may appeal this classification."` |
+| Uncertain | `"❓ Origin Uncertain — Our system could not confidently determine authorship (61% confidence). When in doubt, we assume human authorship."` |
+| High-confidence Human | `"✓ Likely Human-Written — Our system found no strong indicators of AI generation (22% confidence)."` |
 
 ---
 
@@ -96,10 +109,9 @@ Applied to `POST /submit`:
 
 ### Evidence (rate limit test)
 
-Run while the server is live:
 ```bash
 for i in $(seq 1 12); do
-  curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:5000/submit \
+  curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:5001/submit \
     -H "Content-Type: application/json" \
     -d '{"text": "test", "creator_id": "tester"}'
 done
@@ -126,18 +138,18 @@ Actual output:
 
 ```bash
 # Submit content
-curl -s -X POST http://localhost:5000/submit \
+curl -s -X POST http://localhost:5001/submit \
   -H "Content-Type: application/json" \
   -d '{"text": "My poem text here...", "creator_id": "alice"}'
 # → note the content_id in the response
 
 # File an appeal
-curl -s -X POST http://localhost:5000/appeal \
+curl -s -X POST http://localhost:5001/appeal \
   -H "Content-Type: application/json" \
   -d '{"content_id": "<ID>", "creator_reasoning": "I wrote this by hand — it reflects my personal style."}'
 
 # Verify status updated
-curl -s http://localhost:5000/log
+curl -s http://localhost:5001/log
 ```
 
 The audit log entry will show `"status": "under_review"` and `"appeal_reasoning"` populated.
@@ -146,47 +158,48 @@ The audit log entry will show `"status": "under_review"` and `"appeal_reasoning"
 
 ## Audit Log
 
-Format (JSON, stored in `audit_log.json`):
+Format (JSON, stored in `audit_log.json`). Retrieve live: `GET http://localhost:5001/log`
 
 ```json
 [
   {
-    "content_id": "3f7a2b1e-9c4d-4a2b-8e1f-abc123def456",
-    "creator_id": "alice",
-    "timestamp": "2026-06-28T18:30:00.000000+00:00",
-    "attribution": "likely_ai",
-    "confidence": 0.84,
-    "llm_score": 0.92,
-    "stylo_score": 0.71,
-    "status": "classified",
-    "appeal_reasoning": null
-  },
-  {
-    "content_id": "7d1e3c9a-2b5f-4e8d-a6c0-fedcba987654",
-    "creator_id": "bob",
-    "timestamp": "2026-06-28T18:31:10.000000+00:00",
-    "attribution": "likely_human",
-    "confidence": 0.14,
-    "llm_score": 0.08,
-    "stylo_score": 0.22,
-    "status": "classified",
-    "appeal_reasoning": null
-  },
-  {
-    "content_id": "3f7a2b1e-9c4d-4a2b-8e1f-abc123def456",
-    "creator_id": "alice",
-    "timestamp": "2026-06-28T18:32:05.000000+00:00",
-    "attribution": "likely_ai",
-    "confidence": 0.84,
-    "llm_score": 0.92,
-    "stylo_score": 0.71,
+    "content_id": "302b09eb-eb00-4c3a-a11c-a181d8f464e1",
+    "creator_id": "test-user-1",
+    "timestamp": "2026-06-30T06:15:03.792381+00:00",
+    "attribution": "uncertain",
+    "confidence": 0.6129,
+    "llm_score": 0.8,
+    "stylo_score": 0.3322,
+    "transition_score": 0.0,
     "status": "under_review",
-    "appeal_reasoning": "I wrote this by hand — it reflects my personal style."
+    "appeal_reasoning": "I wrote this myself for my ethics essay — the formal tone is intentional, not AI-generated."
+  },
+  {
+    "content_id": "65ae0329-beab-4e13-ad7c-0d8e1473a216",
+    "creator_id": "test-user-2",
+    "timestamp": "2026-06-30T06:15:11.279615+00:00",
+    "attribution": "likely_human",
+    "confidence": 0.2229,
+    "llm_score": 0.2,
+    "stylo_score": 0.2572,
+    "transition_score": 0.0,
+    "status": "classified",
+    "appeal_reasoning": null
+  },
+  {
+    "content_id": "21948fe1-5e29-49a5-a4e0-ce14dbd4a9e2",
+    "creator_id": "ensemble-test",
+    "timestamp": "2026-06-30T07:02:15.123456+00:00",
+    "attribution": "likely_ai",
+    "confidence": 0.7536,
+    "llm_score": 0.8,
+    "stylo_score": 0.512,
+    "transition_score": 1.0,
+    "status": "classified",
+    "appeal_reasoning": null
   }
 ]
 ```
-
-Retrieve live: `GET http://localhost:5000/log`
 
 ---
 
@@ -198,7 +211,7 @@ Retrieve live: `GET http://localhost:5000/log`
 
 ## Spec Reflection
 
-**Where the spec helped:** Deciding confidence thresholds before writing any code (planning.md) meant the label logic in `signals.py` had a concrete contract to implement against. There was no "figure it out later" moment — the 0.70 / 0.35 thresholds were already justified.
+**Where the spec helped:** Deciding confidence thresholds before writing any code (`planning.md`) meant the label logic in `signals.py` had a concrete contract to implement against. There was no "figure it out later" moment — the 0.70 / 0.35 thresholds were already justified before a single line of Flask code existed.
 
 **Where implementation diverged:** The spec described a separate storage lookup for appeals. In practice, the audit log itself serves as both the event log and the mutable state store — `log_appeal()` mutates the existing entry rather than appending a new one. This is simpler and sufficient at this scale, but would not work in a distributed system.
 
@@ -236,8 +249,6 @@ confidence = 0.5 × llm_score + 0.3 × stylo_score + 0.2 × transition_score
 }
 ```
 
----
-
 ### Analytics Dashboard
 
 `GET /analytics` returns detection patterns across all submissions:
@@ -261,17 +272,17 @@ curl http://localhost:5001/analytics
 
 - **Attribution breakdown** — distribution across all three label categories
 - **Appeal rate** — % of submissions that received an appeal
-- **Average confidence** — extra metric showing overall system certainty across all decisions
+- **Average confidence** — overall system certainty across all decisions
 
 ---
 
 ## File Structure
 
 ```
-app.py          # Flask routes (POST /submit, POST /appeal, GET /log)
-signals.py      # llm_classify(), stylo_score(), combine_scores(), make_label()
+app.py          # Flask routes: POST /submit, POST /appeal, GET /log, GET /analytics
+signals.py      # llm_classify(), stylo_score(), transition_score(), combine_scores(), make_label()
 audit.py        # JSON-backed audit log helpers
-planning.md     # Architecture, spec, AI tool plan
+planning.md     # Architecture, spec, stretch features, AI tool plan
 audit_log.json  # Generated at runtime (git-ignored)
 .env            # GROQ_API_KEY (git-ignored)
 requirements.txt

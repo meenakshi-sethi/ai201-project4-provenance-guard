@@ -16,9 +16,9 @@ Computes 3 metrics, averages into one score:
 - **Blind spot:** Minimalist or intentionally sparse human writing (e.g., poetry) may show low variance and score as AI
 
 ### Combining Signals
-Weighted average: `confidence = 0.6 * llm_score + 0.4 * stylo_score`
+Weighted average: `confidence = 0.5 * llm_score + 0.3 * stylo_score + 0.2 * transition_score`
 
-LLM signal gets higher weight as it captures semantic meaning; stylometrics acts as a corroborating structural check.
+LLM signal is dominant (semantic), stylometrics corroborates structurally, transition phrase density adds a vocabulary-level check. Updated from original 2-signal formula (0.6/0.4) when Signal 3 was added as a stretch feature.
 
 ## Uncertainty Representation
 
@@ -43,7 +43,7 @@ A score of 0.6 means: "the system leans toward AI but not confidently — show t
 - **Who:** Any creator with a `content_id` from a prior `/submit` response
 - **Input fields:** `content_id`, `creator_reasoning` (free text)
 - **On receipt:** status → `under_review`; appeal entry written to audit log alongside original decision
-- **Human reviewer sees:** original classification, confidence, both signal scores, creator's reasoning, timestamp
+- **Human reviewer sees:** original classification, confidence, all three signal scores, creator's reasoning, timestamp
 
 ## Anticipated Edge Cases
 
@@ -55,32 +55,35 @@ A score of 0.6 means: "the system leans toward AI but not confidently — show t
 ```
 POST /submit
     │
-    ├─[text]──► Signal 1: LLM (Groq)      ──► llm_score (0–1)
-    │                                                │
-    └─[text]──► Signal 2: Stylometrics    ──► stylo_score (0–1)
-                                                     │
-                                          confidence = 0.6*llm + 0.4*stylo
-                                                     │
+    ├─[text]──► Signal 1: LLM (Groq)           ──► llm_score (0–1)
+    │                                                     │
+    ├─[text]──► Signal 2: Stylometrics         ──► stylo_score (0–1)
+    │                                                     │
+    └─[text]──► Signal 3: Transition Phrases   ──► transition_score (0–1)
+                                                          │
+                                          confidence = 0.5*llm + 0.3*stylo + 0.2*transition
+                                                          │
                                           label = map(confidence)
-                                                     │
+                                                          │
                                           audit_log.append(entry)
-                                                     │
+                                                          │
                                           ◄── JSON response (content_id, attribution,
-                                                            confidence, label)
+                                                             confidence, label, signals)
 
 POST /appeal
     │
     ├─[content_id] ──► lookup entry ──► status = "under_review"
-    └─[creator_reasoning] ──► audit_log.append(appeal_entry)
+    └─[creator_reasoning] ──► audit_log.update(entry)
                                     │
                               ◄── confirmation JSON
 
-GET /log  ──► return last N audit entries as JSON
+GET /log        ──► return last 20 audit entries as JSON
+GET /analytics  ──► attribution breakdown, appeal rate, avg confidence
 ```
 
-**Submission flow:** Text enters `/submit`, runs through both signals in sequence, scores are weighted-averaged into a confidence value, mapped to one of three label variants, written to the audit log, and returned to the caller.
+**Submission flow:** Text enters `/submit`, runs through all three signals in sequence, scores are weighted-averaged into a confidence value, mapped to one of three label variants, written to the audit log, and returned to the caller.
 
-**Appeal flow:** A `content_id` + reasoning hits `/appeal`, which locates the original entry, flips its status to `under_review`, appends the appeal to the log, and confirms receipt.
+**Appeal flow:** A `content_id` + reasoning hits `/appeal`, which locates the original entry, flips its status to `under_review`, stores the creator's reasoning in the entry, and confirms receipt.
 
 ## Stretch Features
 
